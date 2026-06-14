@@ -1,64 +1,124 @@
 # 🏦 Banking Ledger - Backend API
 
-A robust, production-grade **Banking Ledger System** built with Node.js, Express, and MongoDB. This system implements **double-entry bookkeeping** principles where the ledger serves as the single source of truth for all account balances.
+[![Node.js](https://img.shields.io/badge/Node.js-v18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Express.js](https://img.shields.io/badge/Express.js-v5.0-000000?logo=express&logoColor=white)](https://expressjs.com/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![Zod](https://img.shields.io/badge/Zod-v4.0-3E67B1?logo=zod&logoColor=white)](https://zod.dev/)
+[![JWT](https://img.shields.io/badge/JWT-Authentication-black?logo=json-web-tokens&logoColor=white)](https://jwt.io/)
+[![Swagger Docs](https://img.shields.io/badge/OpenAPI-Swagger--UI-85EA2D?logo=swagger&logoColor=white)](http://localhost:3000/api-docs)
+
+A production-grade, highly secure **Banking Ledger System** API built with Node.js, Express, and MongoDB. This system implements **double-entry bookkeeping** principles where the immutable ledger serves as the single source of truth for all account balances.
 
 ---
 
-## ✨ Features
+## 🏗️ System Architecture & Dataflow
 
-### 🔐 Authentication & Authorization
-- **User Registration** with email/password and automatic welcome email notification
-- **User Login** with JWT-based authentication (cookie + Bearer token support)
-- **Password Hashing** using bcrypt with salt rounds
-- **Protected Routes** via JWT middleware
+### 1. General System Architecture
+The application follows a clean MVC/layered structure separating routes, request validation, authentication middlewares, business logic controllers, and database access schemas.
 
-### 🏛️ Account Management
-- **Create Bank Accounts** linked to authenticated users
-- **Multi-Account Support** — users can hold multiple accounts
-- **Account Status Management** — `ACTIVE`, `FROZEN`, `CLOSED` states
-- **System Accounts** — special immutable accounts for system-level operations
-- **INR Currency** default with extensible currency support
-- **Compound Indexing** on user + status for optimized queries
+```mermaid
+graph TD
+    Client[Client Browser / API Client] -->|HTTP Request| Express[Express App Server]
+    subgraph Express [Express App Pipeline]
+        Router[Router] --> Middleware[Middleware Layer]
+        Middleware -->|1. Validate Payload| Zod[Zod Validation Middleware]
+        Zod -->|2. Authenticate & Blacklist| Auth[Auth Middleware]
+        Auth --> Controller[Controllers Layer]
+    end
+    Controller -->|Read/Write| Models[Mongoose Models]
+    subgraph Database [Database Layer]
+        Models -->|ACID Session| MongoDB[(MongoDB Atlas)]
+    end
+    Controller -->|SMTP TLS / OAuth2| GmailAPI[Gmail OAuth2 Service]
+```
 
-### 💸 Transaction System
-- **Peer-to-Peer Transfers** between any two active accounts
-- **10-Step Transfer Flow** — validates, creates entries, and commits atomically
-- **MongoDB Transactions (Sessions)** — full ACID compliance for transfer operations
-- **Idempotency Key Support** — prevents duplicate transactions on retry
-- **Transaction States** — `PENDING`, `COMPLETED`, `FAILED`, `REVERSED`
-- **Balance Validation** — checks sufficient funds before transfer
-- **Initial Funds Injection** — system user can seed accounts with funds
+### 2. Database Entity Relationship Diagram (ERD)
+All account balances are derived in real-time from matching debit/credit ledger records. **Balances are never stored as mutable numbers directly in accounts.**
 
-### 📒 Double-Entry Ledger
-- **Immutable Ledger Entries** — once created, entries cannot be modified or deleted
-- **CREDIT/DEBIT Tracking** — every transaction creates paired ledger entries
-- **Ledger-Derived Balances** — balances are computed via MongoDB aggregation pipeline (no stored balance field)
-- **Tamper-Proof Design** — middleware hooks block all update/delete operations on ledger entries
+```mermaid
+erDiagram
+    USER {
+        ObjectId _id PK
+        string name
+        string email
+        string password
+        boolean systemUser
+    }
+    ACCOUNT {
+        ObjectId _id PK
+        ObjectId user FK
+        string status "ACTIVE | FROZEN | CLOSED"
+        string currency "INR | etc."
+        boolean systemAccount
+    }
+    TRANSACTION {
+        ObjectId _id PK
+        ObjectId fromAccount FK
+        ObjectId toAccount FK
+        number amount
+        string status "PENDING | COMPLETED | FAILED | REVERSED"
+        string idempotencyKey
+    }
+    LEDGER {
+        ObjectId _id PK
+        ObjectId account FK
+        ObjectId transaction FK
+        number amount
+        string type "DEBIT | CREDIT"
+    }
+    BLACKLIST {
+        ObjectId _id PK
+        string token
+        date blacklistdAt
+    }
+    USER ||--o{ ACCOUNT : owns
+    ACCOUNT ||--o{ LEDGER : has
+    TRANSACTION ||--o{ LEDGER : references
+```
 
-### 📧 Email Notifications (Gmail OAuth2)
-- **Registration Welcome Email** — sent on successful signup
-- **Transaction Success Email** — sent after each completed transfer
-- **Transaction Failure Email** — template ready for failed transfer notifications
-- **OAuth2 Authentication** — secure Gmail integration via Google APIs
+### 3. The 10-Step Transaction Flow
+This diagram illustrates the sequence of checks, transactions, and notification dispatches during a peer-to-peer money transfer.
 
-### 🛡️ System User & Admin Features
-- **Dedicated System User** — special privileged user for fund injection
-- **System User Middleware** — separate auth middleware verifying `systemUser` flag
-- **Setup Script** — automated system user + account creation (`setup-system-user.js`)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant API as Express API
+    participant DB as MongoDB (ACID Session)
+    participant Mail as Gmail OAuth2 Service
 
-### ✅ Input Validation & Sanitization (Zod)
-- **Schema-level validation** on every request body using [Zod](https://zod.dev/) v4
-- **Auth**: email format, name length (2–50), password length (6–128)
-- **Accounts**: currency must be a valid 3-letter ISO code
-- **Transactions**: MongoDB ObjectId format validation, positive amount, max limits, non-empty idempotency key
-- **Auto-sanitization** — emails are trimmed + lowercased before hitting the database
-- **Field-level error messages** returned as structured JSON on `400` responses
+    Client->>API: POST /api/transactions (payload)
+    API->>API: Run Zod request validation
+    API->>API: Verify JWT & Blacklist check
+    API->>DB: Check if idempotencyKey already exists
+    alt Key exists
+        DB-->>API: Return transaction state (COMPLETED/PENDING/FAILED)
+        API-->>Client: Respond with cached transaction state
+    end
+    API->>DB: Verify both fromAccount & toAccount status is ACTIVE
+    API->>DB: Calculate sender's balance (aggregation sum of CREDITs - DEBITs)
+    alt Balance < amount
+        API-->>Client: Return 400 Insufficient Balance
+    end
+    API->>DB: Start MongoDB session & startTransaction
+    API->>DB: Create Transaction record (status: PENDING)
+    API->>DB: Create DEBIT ledger entry for sender
+    API->>DB: Create CREDIT ledger entry for receiver
+    API->>DB: Update Transaction record (status: COMPLETED)
+    API->>DB: Commit Transaction & endSession
+    API-->>Client: Respond 201 Transaction Completed Successfully
+    API->>Mail: Trigger sendTransactionEmail (Async)
+```
 
-### 📖 Interactive API Documentation (Swagger)
-- **OpenAPI 3.0** spec auto-generated from JSDoc comments
-- **Swagger UI** served at `http://localhost:3000/api-docs`
-- All request/response schemas documented with examples
-- Bearer JWT authorization built into the UI (`persistAuthorization` enabled)
+---
+
+## 💪 Core Strengths & Architectural Quality
+
+* **Immutable Ledger Integrity**: Ledger records cannot be updated or deleted. Database-level `pre` hooks and field immutability constraints block all tampering attempts, ensuring a perfect audit trail.
+* **Full ACID Safety**: Peer-to-peer transfers are wrapped in MongoDB database sessions. If any individual database insertion fails (e.g. database network drops), the entire operation rolls back.
+* **Hardened Idempotency Guarantee**: Submitting the same transaction payload twice returns the cached result of the original transaction, eliminating double-spending risk.
+* **JWT Session Blacklisting (Secure Logout)**: Blacklisted tokens are stored in a high-speed collection with a MongoDB TTL index (automatically expiring and cleaning up from the DB after 3 days).
+* **Defensive Schema Parsing**: Powered by Zod, payload validation runs at the router level, automatically sanitizing inputs (trimming/lowercasing emails) and short-circuiting malformed requests before hitting controllers.
 
 ---
 
@@ -66,36 +126,37 @@ A robust, production-grade **Banking Ledger System** built with Node.js, Express
 
 ```
 Banking_System_Backend(Advanced)/
-├── server.js                    # Entry point
-├── package.json                 # Dependencies & scripts
-├── setup-system-user.js         # System user bootstrap script
+├── server.js                    # Entry point & connection boot
+├── package.json                 # Core dependencies and runtime scripts
+├── setup-system-user.js         # Privileged system user bootstrap script
 └── src/
-    ├── app.js                   # Express app setup, routes & Swagger UI
+    ├── app.js                   # Express configuration, routing, and Swagger UI
     ├── config/
-    │   ├── db.js                # MongoDB connection config
-    │   └── swagger.js           # OpenAPI 3.0 spec (swagger-jsdoc)
+    │   ├── db.js                # MongoDB connection management
+    │   └── swagger.js           # Swagger OpenAPI specification definitions
     ├── controllers/
-    │   ├── auth.controller.js   # Register & Login logic
-    │   ├── account.controller.js# Account CRUD & balance
-    │   └── transaction.controller.js # Transfer & initial funds
+    │   ├── auth.controller.js   # User auth handlers (Register, Login, Logout)
+    │   ├── account.controller.js# Account management & dynamic ledger balance
+    │   └── transaction.controller.js # Atomic transfer logic & funds seeding
     ├── middleware/
-    │   ├── auth.middleware.js   # JWT auth & system user auth
-    │   └── validate.middleware.js # Generic Zod validation middleware
+    │   ├── auth.middleware.js   # JWT authentication & session blacklist checks
+    │   └── validate.middleware.js # Generic Zod validation handler
     ├── model/
-    │   ├── user.model.js        # User schema with bcrypt hooks
-    │   ├── account.model.js     # Account schema with getBalance()
-    │   ├── transaction.model.js # Transaction schema with idempotency
-    │   └── ledger.model.js      # Immutable ledger schema
+    │   ├── user.model.js        # User document schema
+    │   ├── account.model.js     # Account document schema
+    │   ├── transaction.model.js # Transaction tracking schema
+    │   ├── ledger.model.js      # Immutable double-entry ledger database schema
+    │   └── blacklist.model.js   # Token blacklist document schema (TTL indexed)
     ├── routes/
-    │   ├── auth.route.js        # /api/auth/* (with Swagger JSDoc)
-    │   ├── account.route.js     # /api/accounts/* (with Swagger JSDoc)
-    │   └── transaction.route.js # /api/transactions/* (with Swagger JSDoc)
+    │   ├── auth.route.js        # Auth routing rules & Swagger specs
+    │   ├── account.route.js     # Account routing rules & Swagger specs
+    │   └── transaction.route.js # Transaction routing rules & Swagger specs
     ├── services/
-    │   └── email.service.js     # Gmail OAuth2 email service
+    │   └── email.service.js     # Nodemailer and Gmail OAuth2 service
     └── validators/
-        ├── auth.validator.js        # Zod schemas for register & login
-        ├── account.validator.js     # Zod schema for account creation
-        └── transaction.validator.js # Zod schemas for transfers & fund seeding
+        ├── auth.validator.js        # Schema constraints for register & login
+        ├── account.validator.js     # Schema constraints for account creations
+        └── transaction.validator.js # Schema constraints for transaction transfers
 ```
 
 ---
@@ -103,103 +164,97 @@ Banking_System_Backend(Advanced)/
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Node.js** (v18+)
-- **MongoDB** (local or Atlas with replica set for transactions)
-- **Gmail OAuth2 Credentials** (for email notifications)
+* **Node.js** (v18+)
+* **MongoDB Atlas** (or a local MongoDB replica set for transaction sessions support)
+* **Google Cloud Project Credentials** (for Gmail OAuth2 email dispatch)
 
 ### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/devbyhimans/Bank_ledger.git
+   cd Bank_ledger/Banking_System_Backend(Advanced)
+   ```
+2. Install the required dependencies:
+   ```bash
+   npm install
+   ```
 
-```bash
-# Clone the repository
-git clone https://github.com/devbyhimans/Bank_ledger.git
-cd Bank_ledger/Banking_System_Backend(Advanced)
-
-# Install dependencies
-npm install
-```
-
-### Environment Variables
-
-Create a `.env` file in the `Banking_System_Backend(Advanced)/` directory:
-
+### Environment Setup
+Create a `.env` file in the root directory (`Banking_System_Backend(Advanced)/`):
 ```env
 PORT=3000
-MONGO_URI=mongodb://localhost:27017/banking_ledger
-JWT_SECRET=your_jwt_secret
+MONGO_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/BankingLedger
+JWT_SECRET=your_high_entropy_jwt_secret_key
 
 # Gmail OAuth2
-EMAIL_USER=your_email@gmail.com
+EMAIL_USER=your_gmail_address@gmail.com
 CLIENT_ID=your_google_client_id
 CLIENT_SECRET=your_google_client_secret
 REFRESH_TOKEN=your_google_refresh_token
 ```
 
-### Run the Application
-
-```bash
-# Development mode (with auto-reload)
-npm run dev
-
-# Production mode
-npm start
-```
-
-### Bootstrap System User
-
+### Initial Bootstrap
+Run the setup script to bootstrap the system user and a corresponding system account (needed to seed initial funds to new users):
 ```bash
 node setup-system-user.js
 ```
 
----
-
-## 📡 API Endpoints
-
-> 💡 **Interactive docs available at [`http://localhost:3000/api-docs`](http://localhost:3000/api-docs)** after starting the server.
-
-### Auth
-| Method | Endpoint              | Description        | Auth | Validated |
-|--------|-----------------------|--------------------|------|-----------|
-| POST   | `/api/auth/register`  | Register new user  | ❌   | ✅ Zod   |
-| POST   | `/api/auth/login`     | Login user         | ❌   | ✅ Zod   |
-| POST   | `/api/auth/logout`    | Logout user        | ✅   | —        |
-
-### Account
-| Method | Endpoint                              | Description         | Auth | Validated |
-|--------|---------------------------------------|---------------------|------|-----------|
-| POST   | `/api/accounts/create`                | Create new account  | ✅   | ✅ Zod   |
-| GET    | `/api/accounts/`                      | Get user's accounts | ✅   | —        |
-| GET    | `/api/accounts/balance/:accountId`    | Get account balance | ✅   | —        |
-
-### Transaction
-| Method | Endpoint                                       | Description          | Auth       | Validated |
-|--------|------------------------------------------------|----------------------|------------|-----------|
-| POST   | `/api/transactions/`                           | Transfer funds       | ✅ User    | ✅ Zod   |
-| POST   | `/api/transactions/system/intial-funds`        | Seed initial funds   | ✅ System  | ✅ Zod   |
-
-### Docs
-| Method | Endpoint      | Description              |
-|--------|---------------|--------------------------|
-| GET    | `/api-docs`   | Swagger UI (interactive) |
+### Running the Server
+* **Development mode** (with hot-reload):
+  ```bash
+  npm run dev
+  ```
+* **Production mode**:
+  ```bash
+  npm start
+  ```
 
 ---
 
-## 🔧 Tech Stack
+## 📡 API Endpoints Reference
 
-- **Runtime**: Node.js
-- **Framework**: Express.js v5
-- **Database**: MongoDB with Mongoose ODM
-- **Validation**: Zod v4 (runtime schema validation + sanitization)
-- **Authentication**: JWT + bcrypt
-- **Email**: Nodemailer + Gmail OAuth2 (Google APIs)
-- **Sessions**: MongoDB Transactions (ACID)
-- **API Docs**: swagger-jsdoc + swagger-ui-express (OpenAPI 3.0)
+> 💡 Interactive swagger documentation is served at [`http://localhost:3000/api-docs`](http://localhost:3000/api-docs) once the server starts.
+
+### 1. Authentication (`/api/auth/*`)
+| Method | Path | Description | Authorization | Payload Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| **POST** | `/register` | Sign up user & send welcome email | Public | Zod Schema |
+| **POST** | `/login` | Authorize session and acquire JWT | Public | Zod Schema |
+| **POST** | `/logout` | Invalidate token and clear cookies | JWT Protected | Session Token |
+
+### 2. Accounts Management (`/api/accounts/*`)
+| Method | Path | Description | Authorization | Payload Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| **POST** | `/create` | Open a new bank account | JWT Protected | Zod Schema |
+| **GET** | `/` | Retrieve list of owned accounts | JWT Protected | Session Token |
+| **GET** | `/balance/:accountId` | Query balance (dynamic ledger aggregation) | JWT Protected | Path Param |
+
+### 3. Transactions & Transfers (`/api/transactions/*`)
+| Method | Path | Description | Authorization | Payload Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| **POST** | `/` | Execute P2P transfer (ACID Compliant) | JWT Protected | Zod Schema |
+| **POST** | `/system/intial-funds` | Seed funds into account | System User only | Zod Schema |
+
+### 4. Interactive Docs
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| **GET** | `/api-docs` | Interactive Swagger UI (includes auth persisting) |
+
+---
+
+## 🔧 Technical Stack Details
+
+* **Language/Platform**: Node.js & Javascript (CommonJS module system)
+* **HTTP Router**: Express.js v5.0 (supporting modern middleware patterns)
+* **DBMS & ODM**: MongoDB Atlas & Mongoose v9.x
+* **Validation Engine**: Zod v4.x
+* **Crypto & Signatures**: JWT (jsonwebtoken) & bcrypt
+* **Documentation**: swagger-jsdoc & swagger-ui-express
 
 ---
 
 ## 📄 License
-
-ISC
+Licensed under the [ISC License](LICENSE).
 
 ---
-
 Built with ❤️ by [devbyhimans](https://github.com/devbyhimans)
