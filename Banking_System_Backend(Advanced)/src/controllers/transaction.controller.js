@@ -141,7 +141,7 @@ async function createTransaction(req, res) {
     const completedTransaction = await transactionModel.findOneAndUpdate(
       { _id: transaction._id },
       { status: "COMPLETED" },
-      { session, new: true }
+      { session, returnDocument: 'after' }
     );
 
     // 9. Commit MongoDB session
@@ -249,7 +249,7 @@ async function createIntialFunds(req, res) {
     const completedTransaction = await transactionModel.findOneAndUpdate(
       { _id: transaction._id },
       { status: "COMPLETED" },
-      { session, new: true }
+      { session, returnDocument: 'after' }
     );
 
     // 9. Commit MongoDB session
