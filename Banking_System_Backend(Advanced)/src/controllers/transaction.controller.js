@@ -279,5 +279,5 @@ async function createIntialFunds(req, res) {
 module.exports = {
   createTransaction,
   createIntialFunds,
-  createInitialFundsTransaction: createIntialFunds
+  
 };

@@ -161,6 +161,7 @@ node setup-system-user.js
 |--------|-----------------------|--------------------|------|-----------|
 | POST   | `/api/auth/register`  | Register new user  | ❌   | ✅ Zod   |
 | POST   | `/api/auth/login`     | Login user         | ❌   | ✅ Zod   |
+| POST   | `/api/auth/logout`    | Logout user        | ✅   | —        |
 
 ### Account
 | Method | Endpoint                              | Description         | Auth | Validated |

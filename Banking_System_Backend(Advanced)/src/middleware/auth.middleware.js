@@ -1,4 +1,5 @@
 const userModel = require("../model/user.model");
+const blacklistModel = require("../model/blacklist.model");
 const JWT = require("jsonwebtoken");
 
 async function authMiddleware(req, res, next) {
@@ -13,6 +14,14 @@ async function authMiddleware(req, res, next) {
   }
 
   try {
+    // Check if token is blacklisted
+    const isBlacklisted = await blacklistModel.findOne({ token });
+    if (isBlacklisted) {
+      return res.status(401).json({
+        message: "Unauthorized access, token is logged out/blacklisted",
+      });
+    }
+
     const decoded = JWT.verify(token, process.env.JWT_SECRET);
 
     const user = await userModel.findById(decoded.userId);
@@ -48,12 +57,20 @@ async function authSystemUserMiddleware(req,res,next) {
     });
   }
 
-    try {
+  try {
+    // Check if token is blacklisted
+    const isBlacklisted = await blacklistModel.findOne({ token });
+    if (isBlacklisted) {
+      return res.status(401).json({
+        message: "Unauthorized access, token is logged out/blacklisted",
+      });
+    }
+
     const decoded = JWT.verify(token, process.env.JWT_SECRET);
 
     const user = await userModel.findById(decoded.userId).select("+systemUser");
 
-    if (!user.systemUser) {
+    if (!user || !user.systemUser) {
       return res.status(403).json({
         message: "Access denied, not a System user",
       });

@@ -1,4 +1,5 @@
 const userModel = require("../model/user.model");
+const blacklistModel = require("../model/blacklist.model");
 const JWT = require("jsonwebtoken");
 const emailService = require('../services/email.service')
 
@@ -98,8 +99,40 @@ async function loginUser(req, res) {
   }
 }
 
+// User Logout Controller
+// POST /api/auth/logout
+async function logoutUser(req, res) {
+  try {
+    const token =
+      req.cookies.token ||
+      req.headers.authorization?.split(" ")[1];
+
+    if (!token) {
+      return res.status(400).json({
+        message: "Token is required to logout",
+      });
+    }
+
+    // Check if token is already blacklisted to avoid duplicate key error
+    const isBlacklisted = await blacklistModel.findOne({ token });
+    if (!isBlacklisted) {
+      await blacklistModel.create({ token });
+    }
+
+    res.clearCookie("token");
+
+    return res.status(200).json({
+      message: "Logged out successfully",
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: err.message,
+    });
+  }
+}
 
 module.exports = {
   registerUser,
   loginUser,
+  logoutUser,
 };

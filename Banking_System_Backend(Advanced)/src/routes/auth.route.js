@@ -1,9 +1,11 @@
 const express = require("express");
 const authController = require("../controllers/auth.controller");
+const authMiddleware = require("../middleware/auth.middleware");
 const { validate } = require("../middleware/validate.middleware");
 const { registerSchema, loginSchema } = require("../validators/auth.validator");
 
 const router = express.Router();
+
 
 /**
  * @openapi
@@ -122,5 +124,50 @@ router.post("/register", validate(registerSchema), authController.registerUser);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post("/login", validate(loginSchema), authController.loginUser);
+
+
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Logout user / blacklist token
+ *     description: |
+ *       Logs out the currently authenticated user by adding their JWT token to the blacklist database.
+ *       Once blacklisted, the token becomes invalid and cannot be used for any future authenticated requests.
+ *       Also clears the client "token" cookie.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Logout successful
+ *         headers:
+ *           Set-Cookie:
+ *             description: Clear token cookie
+ *             schema:
+ *               type: string
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Logged out successfully"
+ *       401:
+ *         description: Unauthorized — token missing, invalid, or already blacklisted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post("/logout", authMiddleware.authMiddleware, authController.logoutUser);
 
 module.exports = router;
